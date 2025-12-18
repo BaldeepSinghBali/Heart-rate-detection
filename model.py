@@ -573,133 +573,109 @@ for model, vals in metrics.items():
 
 """Application"""
 
+
 import cv2
 import numpy as np
 import matplotlib.pyplot as plt
-from sklearn.preprocessing import StandardScaler
+
+# ===== MATCH TRAINING CONFIG =====
+
+FS_SIGNAL = 30
+WINDOW_SEC = 10
+STRIDE_SEC = 1
+WINDOW = FS_SIGNAL * WINDOW_SEC
+STRIDE = FS_SIGNAL * STRIDE_SEC
+F_LOW, F_HIGH = 0.7, 3.0
+# =================================
+
 
 class HeartRateMonitor:
-    def __init__(self, model, model_type='rf', fs=30):
+    def __init__(self, model):
         self.model = model
-        self.model_type = model_type
-        self.fs = fs
-        self.scaler = StandardScaler()
 
     def extract_signal_from_video(self, video_path):
-
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
-            print(f"Error: Could not open video {video_path}")
-            return None
+            raise RuntimeError("Cannot open video")
 
-        raw_signal = []
-
+        signal = []
         while True:
             ret, frame = cap.read()
             if not ret:
                 break
 
-            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            h, w, _ = rgb.shape
+            s = int(min(h, w) * 0.5)
 
-            h, w, _ = frame_rgb.shape
-            min_dim = min(h, w)
-            roi_size = int(min_dim * 0.5)
+            cx, cy = w // 2, h // 2
+            roi = rgb[
+                cy - s // 2 : cy + s // 2,
+                cx - s // 2 : cx + s // 2
+            ]
 
-            center_x, center_y = w // 2, h // 2
-            x1 = center_x - roi_size // 2
-            x2 = center_x + roi_size // 2
-            y1 = center_y - roi_size // 2
-            y2 = center_y + roi_size // 2
-
-            roi_frame = frame_rgb[y1:y2, x1:x2]
-
-            avg_color = np.mean(roi_frame, axis=(0, 1))
-            raw_signal.append(avg_color)
+            signal.append(np.mean(roi, axis=(0, 1)))
 
         cap.release()
-        return np.array(raw_signal)
+        return np.asarray(signal, dtype=np.float32)
 
-    def preprocess_signal(self, raw_signal):
-        signal = np.clip(raw_signal, 0, 255)
-        signal_scaled = self.scaler.fit_transform(signal)
-        return signal_scaled
+    def normalize_subject_signal(self, sig):
+        mu = sig.mean(axis=0, keepdims=True)
+        sd = sig.std(axis=0, keepdims=True) + 1e-8
+        return (sig - mu) / sd
 
-    def segment_signal(self, signal):
-        num_seconds = len(signal) // self.fs
-        windows = []
-        for i in range(num_seconds):
-            start_idx = i * self.fs
-            end_idx = start_idx + self.fs
-            window = signal[start_idx:end_idx, :]
-            windows.append(window)
-        return np.array(windows)
+    def make_windows(self, sig):
+        return np.array([
+            sig[i:i + WINDOW]
+            for i in range(0, len(sig) - WINDOW + 1, STRIDE)
+        ])
+
+    def bandpower_features(self, X):
+        feats = []
+        freqs = np.fft.rfftfreq(X.shape[1], d=1 / FS_SIGNAL)
+        band = (freqs >= F_LOW) & (freqs <= F_HIGH)
+
+        for w in X:
+            mu = w.mean(axis=0)
+            sd = w.std(axis=0)
+            fft = np.abs(np.fft.rfft(w, axis=0))[band]
+            bp = fft.mean(axis=0)
+            peak = freqs[band][fft.argmax(axis=0)]
+            feats.append(np.concatenate([mu, sd, bp, peak]))
+
+        return np.asarray(feats)
 
     def predict(self, video_path):
-        print(f"Processing video: {video_path}...")
+        raw = self.extract_signal_from_video(video_path)
+        if len(raw) < WINDOW:
+            raise RuntimeError("Video too short for inference")
 
-        raw_signal = self.extract_signal_from_video(video_path)
-        if raw_signal is None or len(raw_signal) == 0:
-            print("No signal extracted.")
-            return
+        sig = self.normalize_subject_signal(np.clip(raw, 0, 255))
+        Xw = self.make_windows(sig)
+        F = self.bandpower_features(Xw)
 
-        print(f"Video duration: {len(raw_signal)/self.fs:.1f} seconds")
+        delta_hr = self.model.predict(F)
+        hr = delta_hr + delta_hr.mean()
 
-        clean_signal = self.preprocess_signal(raw_signal)
+        self.plot(hr)
+        return hr
 
-        X_windows = self.segment_signal(clean_signal)
-        if len(X_windows) == 0:
-            print("Video too short (needs at least 1 second).")
-            return
+    def plot(self, hr):
+        t = np.arange(len(hr)) * STRIDE_SEC
 
-        if self.model_type == 'rf':
-            X_input = X_windows.reshape(X_windows.shape[0], -1)
-            predictions = self.model.predict(X_input)
-        else:
-            X_input = X_windows
-            predictions = self.model.predict(X_input, verbose=0)
-
-        if predictions.ndim > 1 and predictions.shape[1] >= 2:
-            hr_values = predictions[:, 0]
-            spo2_values = predictions[:, 1]
-        else:
-            print("Model output format not recognized. Returning only HR if available.")
-            hr_values = predictions[:, 0] if predictions.ndim > 1 else predictions
-            spo2_values = np.zeros_like(hr_values)
-
-        self.plot_results(hr_values, spo2_values)
-
-        return hr_values, spo2_values
-
-    def plot_results(self, hr_values, spo2_values):
-        time_axis = np.arange(len(hr_values))
-
-        plt.figure(figsize=(12, 8))
-
-        plt.subplot(2, 1, 1)
-        plt.plot(time_axis, hr_values, 'o-', color='r', label='Predicted HR')
-        avg_hr = np.mean(hr_values)
-        plt.axhline(y=avg_hr, color='darkred', linestyle='--', alpha=0.5, label=f'Avg HR: {avg_hr:.1f}')
-        plt.ylabel('BPM')
-        plt.title('Heart Rate (BPM) vs Time')
-        plt.grid(True, linestyle='--', alpha=0.7)
+        plt.figure(figsize=(10, 4))
+        plt.plot(t, hr, marker="o")
+        plt.axhline(hr.mean(), linestyle="--", label=f"Avg HR = {hr.mean():.1f}")
+        plt.xlabel("Time (s)")
+        plt.ylabel("Heart Rate (BPM)")
+        plt.title("Heart Rate Estimation (Random Forest)")
+        plt.grid(True)
         plt.legend()
-
-        plt.subplot(2, 1, 2)
-        plt.plot(time_axis, spo2_values, 'o-', color='b', label='Predicted SpO2')
-        avg_spo2 = np.mean(spo2_values)
-        plt.axhline(y=avg_spo2, color='darkblue', linestyle='--', alpha=0.5, label=f'Avg SpO2: {avg_spo2:.1f}%')
-        plt.ylabel('SpO2 (%)')
-        plt.title('Oxygen Saturation (SpO2) vs Time')
-        plt.xlabel('Time (seconds)')
-        plt.ylim(80, 100)
-        plt.grid(True, linestyle='--', alpha=0.7)
-        plt.legend()
-
         plt.tight_layout()
         plt.show()
 
-        print(f"Summary -> Avg HR: {avg_hr:.1f} BPM | Avg SpO2: {avg_spo2:.1f}%")
+model = rf_baseline   
 
+app = HeartRateMonitor(model)
+hr = app.predict("video.mp4")
 
-app = HeartRateMonitor(model=rf_model, model_type='rf', fs=30)
-hr, spo2 = app.predict('video.mp4')
