@@ -236,6 +236,7 @@ Fte = bandpower_features(Xte)
 
 from sklearn.model_selection import learning_curve
 from sklearn.metrics import mean_absolute_error
+from sklearn.ensemble import RandomForestRegressor
 import numpy as np
 import matplotlib.pyplot as plt
 
@@ -260,20 +261,26 @@ train_sizes, train_scores, val_scores = learning_curve(
 train_mae = -np.mean(train_scores, axis=1)
 val_mae = -np.mean(val_scores, axis=1)
 
-
 plt.figure(figsize=(10, 5))
-plt.plot(train_sizes, train_mae, 'o-', color='red', label='Training Error (MAE)')
-plt.plot(train_sizes, val_mae, 'o-', color='green', label='Validation Error (MAE)')
-plt.title("Baseline Learning Curve (RandomForest)")
+plt.plot(train_sizes, train_mae, 'o-', label='Training MAE')
+plt.plot(train_sizes, val_mae, 'o-', label='Validation MAE')
+plt.title("RandomForest Learning Curve (Delta HR)")
 plt.xlabel("Number of Training Samples")
-plt.ylabel("Mean Absolute Error (BPM)")
+plt.ylabel("MAE (BPM)")
 plt.legend()
 plt.grid(True)
 plt.show()
+
+rf_baseline.fit(Ftr, yd_tr)
+
+pred_delta_rf = rf_baseline.predict(Fte)
+pred_rf = pred_delta_rf + b_te
+
 baseline_mae = mean_absolute_error(ya_te, pred_rf)
 
 print("----- RandomForest Baseline Performance -----")
-print(f"Baseline Test MAE: {baseline_mae:.2f} BPM")
+print(f"Test MAE: {baseline_mae:.2f} BPM")
+
 
 """extra trees"""
 
@@ -352,6 +359,11 @@ plt.show()
 
 import tensorflow as tf
 import tensorflow.keras.backend as K
+from tensorflow.keras import layers, models
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+import numpy as np
+import matplotlib.pyplot as plt
 
 def r2_metric(y_true, y_pred):
     ss_res = K.sum(K.square(y_true - y_pred))
@@ -361,14 +373,30 @@ def r2_metric(y_true, y_pred):
 def rmse_metric(y_true, y_pred):
     return K.sqrt(K.mean(K.square(y_true - y_pred)))
 
+def build_tcn(input_shape):
+    inputs = layers.Input(shape=input_shape)
+    x = layers.Conv1D(64, 3, padding="causal", activation="relu", dilation_rate=1)(inputs)
+    x = layers.Conv1D(64, 3, padding="causal", activation="relu", dilation_rate=2)(x)
+    x = layers.Conv1D(64, 3, padding="causal", activation="relu", dilation_rate=4)(x)
+    x = layers.GlobalAveragePooling1D()(x)
+    outputs = layers.Dense(1)(x)
+    return models.Model(inputs, outputs)
+
+tcn = build_tcn(Xtr.shape[1:])
+
 tcn.compile(
     optimizer=tf.keras.optimizers.Adam(1e-3),
     loss="mse",
     metrics=[rmse_metric, r2_metric]
 )
 
+y_scaler = StandardScaler()
+yd_tr_s = y_scaler.fit_transform(yd_tr.reshape(-1, 1)).ravel()
+yd_te_s = y_scaler.transform(yd_te.reshape(-1, 1)).ravel()
+
 history_tcn = tcn.fit(
-    Xtr, yd_tr_s,
+    Xtr,
+    yd_tr_s,
     validation_split=0.1,
     epochs=80,
     batch_size=256,
@@ -376,17 +404,15 @@ history_tcn = tcn.fit(
     verbose=1
 )
 
-import matplotlib.pyplot as plt
-
-def plot_tcn_history_like_extratrees(history, model_name="TCN Model"):
+def plot_tcn_history_like_extratrees(history, model_name="TCN"):
     h = history.history
     epochs = range(1, len(h["loss"]) + 1)
 
     plt.figure(figsize=(18, 5))
 
     plt.subplot(1, 3, 1)
-    plt.plot(epochs, h["loss"], 'o-', color='red', label="Train Loss")
-    plt.plot(epochs, h["val_loss"], 'o-', color='green', label="Val Loss")
+    plt.plot(epochs, h["loss"], label="Train Loss")
+    plt.plot(epochs, h["val_loss"], label="Val Loss")
     plt.title(f"{model_name}: Loss (MSE)")
     plt.xlabel("Epochs")
     plt.ylabel("MSE")
@@ -394,8 +420,8 @@ def plot_tcn_history_like_extratrees(history, model_name="TCN Model"):
     plt.grid(True)
 
     plt.subplot(1, 3, 2)
-    plt.plot(epochs, h["rmse_metric"], 'o-', color='red', label="Train RMSE")
-    plt.plot(epochs, h["val_rmse_metric"], 'o-', color='green', label="Val RMSE")
+    plt.plot(epochs, h["rmse_metric"], label="Train RMSE")
+    plt.plot(epochs, h["val_rmse_metric"], label="Val RMSE")
     plt.title(f"{model_name}: RMSE")
     plt.xlabel("Epochs")
     plt.ylabel("RMSE")
@@ -403,8 +429,8 @@ def plot_tcn_history_like_extratrees(history, model_name="TCN Model"):
     plt.grid(True)
 
     plt.subplot(1, 3, 3)
-    plt.plot(epochs, h["r2_metric"], 'o-', color='red', label="Train R2")
-    plt.plot(epochs, h["val_r2_metric"], 'o-', color='green', label="Val R2")
+    plt.plot(epochs, h["r2_metric"], label="Train R2")
+    plt.plot(epochs, h["val_r2_metric"], label="Val R2")
     plt.title(f"{model_name}: R2 Score")
     plt.xlabel("Epochs")
     plt.ylabel("R2")
@@ -416,11 +442,54 @@ def plot_tcn_history_like_extratrees(history, model_name="TCN Model"):
 
 plot_tcn_history_like_extratrees(history_tcn, "TCN (fast)")
 
+pred_delta_tcn = y_scaler.inverse_transform(
+    tcn.predict(Xte)
+).ravel()
+
+pred_tcn = pred_delta_tcn + b_te
+
+mae_tcn = mean_absolute_error(ya_te, pred_tcn)
+rmse_tcn = np.sqrt(mean_squared_error(ya_te, pred_tcn))
+r2_tcn = r2_score(ya_te, pred_tcn)
+
+print("----- TCN Test Performance -----")
+print(f"MAE  : {mae_tcn:.2f} BPM")
+print(f"RMSE : {rmse_tcn:.2f} BPM")
+print(f"R2   : {r2_tcn:.3f}")
+
 """metrics"""
 
-import matplotlib.pyplot as plt
-import numpy as np
+from sklearn.ensemble import RandomForestRegressor, ExtraTreesRegressor
 from sklearn.metrics import r2_score, mean_squared_error, mean_absolute_error
+import numpy as np
+import matplotlib.pyplot as plt
+
+rf_model = RandomForestRegressor(
+    n_estimators=600,
+    max_depth=18,
+    min_samples_leaf=8,
+    random_state=SEED,
+    n_jobs=-1
+)
+
+rf_model.fit(Ftr, yd_tr)
+pred_rf = rf_model.predict(Fte) + b_te
+
+et_model = ExtraTreesRegressor(
+    n_estimators=800,
+    max_depth=18,
+    min_samples_leaf=6,
+    random_state=SEED,
+    n_jobs=-1
+)
+
+et_model.fit(Ftr, yd_tr)
+pred_et = et_model.predict(Fte) + b_te
+
+pred_delta_tcn = y_scaler.inverse_transform(
+    tcn.predict(Xte)
+).ravel()
+pred_tcn = pred_delta_tcn + b_te
 
 models = ["RandomForest", "ExtraTrees", "TCN"]
 colors = ["#6CCF7D", "#F2C94C", "#F2994A"]
@@ -449,41 +518,27 @@ plt.figure(figsize=(14, 10))
 
 plt.subplot(2, 2, 1)
 plt.bar(models, r2_scores, color=colors)
-plt.title("R² Score Comparison (Higher is Better)")
-plt.ylabel("R²")
+plt.title("R² Score Comparison (Higher Is Better)")
 plt.ylim(0, 1)
 plt.grid(axis="y")
-for i, v in enumerate(r2_scores):
-    plt.text(i, v, f"{v:.3f}", ha="center", va="bottom", fontweight="bold")
 
 plt.subplot(2, 2, 2)
 plt.bar(models, rmse_scores, color=colors)
-plt.title("RMSE Comparison (Lower is Better)")
-plt.ylabel("RMSE (BPM)")
+plt.title("RMSE Comparison (Lower Is Better)")
 plt.grid(axis="y")
-for i, v in enumerate(rmse_scores):
-    plt.text(i, v, f"{v:.2f}", ha="center", va="bottom", fontweight="bold")
 
 plt.subplot(2, 2, 3)
 plt.bar(models, mae_scores, color=colors)
-plt.title("MAE Comparison (Lower is Better)")
-plt.ylabel("MAE (BPM)")
+plt.title("MAE Comparison (Lower Is Better)")
 plt.grid(axis="y")
-for i, v in enumerate(mae_scores):
-    plt.text(i, v, f"{v:.2f}", ha="center", va="bottom", fontweight="bold")
 
 plt.subplot(2, 2, 4)
 plt.bar(models, mse_scores, color=colors)
-plt.title("MSE Comparison (Lower is Better)")
-plt.ylabel("MSE")
+plt.title("MSE Comparison (Lower Is Better)")
 plt.grid(axis="y")
-for i, v in enumerate(mse_scores):
-    plt.text(i, v, f"{v:.2f}", ha="center", va="bottom", fontweight="bold")
 
 plt.tight_layout()
 plt.show()
-from sklearn.metrics import r2_score, mean_squared_error, mean_absolute_error
-import numpy as np
 
 metrics = {
     "RandomForest": {
@@ -507,14 +562,14 @@ for m in metrics.values():
     m["RMSE"] = np.sqrt(m["MSE"])
 
 print("\n========== FINAL TEST METRICS ==========\n")
-
 for model, vals in metrics.items():
-    print(f"{model}")
+    print(model)
     print(f"  R2   : {vals['R2']:.3f}")
     print(f"  MAE  : {vals['MAE']:.2f} BPM")
     print(f"  RMSE : {vals['RMSE']:.2f} BPM")
     print(f"  MSE  : {vals['MSE']:.2f}")
     print("-" * 40)
+
 
 """Application"""
 
