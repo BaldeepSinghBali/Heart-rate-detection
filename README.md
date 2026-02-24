@@ -5,10 +5,8 @@ Download this [notebook](https://github.com/AndrewBlur/HeartRatePrediction/blob/
 ## Project Structure
 
 - `dataset/`:  he data is from [MEDVSE repository](https://github.com/MahdiFarvardin/MEDVSE).
-- `src/`: Contains the Python source code for data loading, preprocessing, modeling, training, evaluation, and prediction.
+- `model/`: Contains the Python source code for data loading, preprocessing, modeling, training, evaluation, and prediction.
 - `notebooks/`: Can be used for experimental notebooks.
-- `main.py`: The main script to run the entire pipeline.
-- `requirements.txt`: The required Python packages.
 
 ## Usage
 
