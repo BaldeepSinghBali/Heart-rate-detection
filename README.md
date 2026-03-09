@@ -44,3 +44,6 @@ This project implements and compares the following models:
 Below is a demonstration of the heart rate detection system in action.
 
 ![Heart Rate Detection Demo](video/video.gif)
+
+
+![Results](screenshots)
