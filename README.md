@@ -46,4 +46,14 @@ Below is a demonstration of the heart rate detection system in action.
 ![Heart Rate Detection Demo](video/video.gif)
 
 
-![Results](screenshots)
+## Results
+
+Below are some screenshots of the heart rate detection system.
+
+![EDA](screenshots/EDA.png)
+
+![EDA](screenshots/EDA-1.png)
+
+![EDA](screenshots/EDA-2.png)
+
+![Heart Rate Result](screenshots/Heart Rate Result.png)
