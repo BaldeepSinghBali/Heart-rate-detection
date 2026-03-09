@@ -56,4 +56,4 @@ Below are some screenshots of the heart rate detection system.
 
 ![EDA](screenshots/EDA-2.png)
 
-![Heart Rate Result](screenshots/Heart Rate Result.png)
+![Heart Rate Result](screenshots/HeartRateResult.png)
