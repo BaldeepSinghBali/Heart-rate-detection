@@ -30,3 +30,17 @@ This project implements and compares the following models:
 - Random Forest
 - Extra Trees
 - Temporal Convolutional Network (TCN)
+
+## Test Metrics 
+
+| Model               |   R^2   |     MAE    |    RMSE    |   MSE   |
+|---------------------|---------|------------|------------|---------|
+| Random Forest       |  0.943  |  2.82 BPM  |  3.94 BPM  |  15.53  |
+| Extra Trees         |  0.947  |  2.72 BPM  |  3.80 BPM  |  14.47  |
+| TCN                 |  0.946  |  2.71 BPM  |  3.83 BPM  |  14.67  |
+
+## Project Demo
+
+Below is a demonstration of the heart rate detection system in action.
+
+![Heart Rate Detection Demo](video/video.gif)
